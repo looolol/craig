@@ -6,19 +6,22 @@ import os
 import logging
 import time
 import traceback
-import uuid
-
+import json
+import asyncio
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
 
 # Discord Bot Token and Channel ID
 TOKEN = os.getenv('DISCORD_TOKEN')
-CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID'))  # Spoilers
+CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID'))
+
+RSS_FEED = os.getenv('RSS_FEED')
+POLLING_INTERVAL = int(os.getenv('POLLING_INTERVAL', 3600))  # Default to 3600 seconds if not set
 
 # Setup the Discord Client
 intents = discord.Intents.default()
@@ -27,9 +30,19 @@ client = discord.Client(intents=intents)
 
 RATE_LIMIT_STATUS = 429
 
+# Path for storing processed entry IDs
+ID_FILE = 'processed_ids.json'
+
 # Decode HTML entities
 def decode_url(url):
     return url.replace("&amp;", "&")
+
+def get_entry_id(entry):
+    if '/' not in entry.id:
+        return entry.id
+    else:
+        entry.id = entry.id.split('/')[-1].split("_")[-1]
+        return entry.id
 
 # Function to fetch and parse RSS feed
 def fetch_rss_feed(url):
@@ -39,87 +52,67 @@ def fetch_rss_feed(url):
     logging.info(f'RSS Feed fetched in {time.time() - start_time:.2f} seconds')
     return feed
 
-async def fetch_image(url):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status == 200:
-                return await response.read()
-            elif response.status == RATE_LIMIT_STATUS:
-                logging.warning("Rate limit hit: Retrying...")
-                while response.status == RATE_LIMIT_STATUS:
-                    async with session.get(url) as retry_response:
-                        if retry_response.status == 200:
-                            return await retry_response.read()
-            else:
-                logging.error(f"Failed to fetch image: {url}, status code: {response.status}")
-                return None
+async def fetch_image(url, session):
+    async with session.get(url) as response:
+        if response.status == 200:
+            return await response.read()
+        elif response.status == RATE_LIMIT_STATUS:
+            logging.warning("Rate limit hit: Retrying...")
+            while response.status == RATE_LIMIT_STATUS:
+                async with session.get(url) as retry_response:
+                    if retry_response.status == 200:
+                        return await retry_response.read()
+        else:
+            logging.error(f"Failed to fetch image: {url}, status code: {response.status}")
+            return None
 
 # Function to extract image URLs from the Reddit post
-async def extract_images(entry):
+async def extract_images(entry, session):
     logging.info(f'{entry.id} - Extracting images from post: {entry.title} / {entry.link}')
     images = []
 
     # Fetch post JSON data
     if entry.link:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{entry.link}.json") as response:
-                if response.status == RATE_LIMIT_STATUS:
-                    logging.warning("Rate limit hit: Retrying...")
-                    while response.status == RATE_LIMIT_STATUS:
-                        async with session.get(f"{entry.link}.json") as response:
-                            pass
+        async with session.get(f"{entry.link}.json") as response:
+            if response.status == RATE_LIMIT_STATUS:
+                logging.warning("Rate limit hit: Retrying...")
+                while response.status == RATE_LIMIT_STATUS:
+                    async with session.get(f"{entry.link}.json") as response:
+                        pass
 
-                if response.status == 200:
-                    data = await response.json()
+            if response.status == 200:
+                data = await response.json()
 
-                    try:
-                        for obj in data:
-                            for child in obj['data']['children']:
-                                if child['kind'] == "t3":
+                try:
+                    for obj in data:
+                        for child in obj['data']['children']:
+                            if child['kind'] == "t3":
+                                if 'preview' in child['data']:
+                                    source = child['data']['preview']['images'][0]['source']
+                                    img_link = decode_url(source['url'])
+                                    images.append(img_link)
 
-                                    # Handle Preview Images
-                                    if 'preview' in child['data']:
-                                        source = child['data']['preview']['images'][0]['source']
-                                        img_link = decode_url(source['url'])
-                                        images.append(img_link)
-
-                                    # Handle Metadata
-                                    if 'media_metadata' in child['data']:
-                                        for media_metadata in child['data']['media_metadata'].values():
-                                            if media_metadata.get('e') == 'Image':
-                                                img_link = decode_url(media_metadata['s']['u'])
-                                                images.append(img_link)
-                    except Exception as e:
-                        logging.error(f"Error parsing object: {e}")
-                        logging.error(traceback.format_exc())
-                else:
-                    logging.error(f"Bad response: {response.status}")
+                                if 'media_metadata' in child['data']:
+                                    for media_metadata in child['data']['media_metadata'].values():
+                                        if media_metadata.get('e') == 'Image':
+                                            img_link = decode_url(media_metadata['s']['u'])
+                                            images.append(img_link)
+                except Exception as e:
+                    logging.error(f"Error parsing object: {e}")
+                    logging.error(traceback.format_exc())
+            else:
+                logging.error(f"Bad response: {response.status}")
 
     logging.info(f'{entry.id} - Done! Extracted {len(images)} images:')
     for img in images:
         logging.info(f'{entry.id} -    {img}')
     return images
 
-async def post_all_to_discord(channel, entry, images):
-    logging.info(f'{entry.id} - Posting to Discord: {entry.title}')
-    post_title = f"# [{entry.title}](<{entry.link}>)"
-    batch_size = 10
-
-    if images:
-        for i in range(0, len(images), batch_size):
-            batch = images[i:i+batch_size]
-            await post_to_discord(channel, post_title, entry.link, batch, entry.id)
-    else:
-        await channel.send(post_title)
-
-    logging.info(f'{entry.id} - Finished posting to Discord\n\n')
-
-# Function to send a message to Discord
-async def post_to_discord(channel, title, link, images, entry_id):
+async def post_to_discord(channel, title, link, images, entry_id, session):
     logging.info(f'{entry_id} -   Sending message to Discord channel {channel.id}')
     files = []
     for i, img in enumerate(images):
-        img_data = await fetch_image(img)
+        img_data = await fetch_image(img, session)
         if img_data:
             image_file = BytesIO(img_data)
             image_file.name = f"image{i}.jpg"
@@ -128,19 +121,78 @@ async def post_to_discord(channel, title, link, images, entry_id):
     await channel.send(content=title, files=files)
     logging.info(f'{entry_id} -   Message sent successfully')
 
+async def post_all_to_discord(channel, entry, images, session):
+    logging.info(f'{entry.id} - Posting to Discord: {entry.title}')
+    post_title = f"# [{entry.title}](<{entry.link}>)"
+    batch_size = 10
+
+    if images:
+        for i in range(0, len(images), batch_size):
+            batch = images[i:i+batch_size]
+            await post_to_discord(channel, post_title, entry.link, batch, entry.id, session)
+    else:
+        await channel.send(post_title)
+
+    logging.info(f'{entry.id} - Finished posting to Discord\n')
+
+def load_processed_ids():
+    if os.path.exists(ID_FILE):
+        with open(ID_FILE, 'r') as file:
+            return set(json.load(file))
+    return set()
+
+def save_processed_ids(ids):
+    with open(ID_FILE, 'w') as file:
+        json.dump(list(ids), file)
+
+async def poll_rss_feed(channel):
+    processed_ids = load_processed_ids()
+
+    logging.info(f'Polling Interval: {POLLING_INTERVAL}')
+    async with aiohttp.ClientSession() as session:
+        while True:
+            print("")
+            feed = fetch_rss_feed(RSS_FEED)
+            
+            new_entries = 0
+            new_entry_ids = set()
+            
+            # First pass: Check for new entries
+            for entry in feed.entries:
+                entry_id = get_entry_id(entry)
+                if entry_id not in processed_ids:
+                    new_entry_ids.add(entry_id)
+                    new_entries += 1
+
+            if new_entries > 0:
+                logging.info(f'New entries found: {new_entries}\n')
+
+                entries_process = 0
+                
+                # Process new entries in reverse order
+                for entry in reversed(feed.entries):
+                    entry_id = get_entry_id(entry)
+                    if entry_id in new_entry_ids:
+                        logging.info(f'{entry_id} - Processing new entry: {entry.title} (ID: {entry_id})')
+                        images = await extract_images(entry, session)
+                        await post_all_to_discord(channel, entry, images, session)
+                        
+                        # Save ID immediately after processing
+                        processed_ids.add(entry_id)
+                        save_processed_ids(processed_ids)
+                        entries_process = entries_process + 1
+
+                logging.info(f'New Entries Processed: {entries_process}')        
+
+            else:
+                logging.info('No new entries found')
+
+            await asyncio.sleep(POLLING_INTERVAL)
+
 @client.event
 async def on_ready():
     logging.info(f'Logged in as {client.user}')
     channel = client.get_channel(CHANNEL_ID)
-
-    rss_url = 'https://www.reddit.com/search.rss?q=flair%3Aspoiler+%28subreddit%3AmagicTCG%29&include_over_18=on&sort=new&t=all'
-    feed = fetch_rss_feed(rss_url)
-
-    logging.info(f'Number of entries in feed: {len(feed.entries)}\n\n')
-
-    for entry in feed.entries:
-        entry.id = uuid.uuid4()  # Add a unique ID for each entry
-        images = await extract_images(entry)
-        await post_all_to_discord(channel, entry, images)
+    await poll_rss_feed(channel)
 
 client.run(TOKEN)
