@@ -46,7 +46,7 @@ async def fetch_image(url):
 
 # Function to extract image URLs from the Reddit post
 async def extract_images(entry):
-	print(f'\nExtracting images...{entry.title} / {entry.link}')
+	print(f'\nExtracting images...\n\t{entry.title}\n\t{entry.link}')
 	images = []
 
 	# fetch post json data
@@ -95,7 +95,7 @@ async def extract_images(entry):
 async def post_all_to_discord(channel, title, link, images):
 	print('Posting to Alldiscord...')
 
-	post_title = f"# {title}\n<{link}>"
+	post_title = f"# [{title}](<{link}>)"
 	batch_size = 10
 
 	if images:
