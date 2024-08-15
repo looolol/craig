@@ -1,8 +1,8 @@
 import discord
 import os
-from common import setup_logging
-from discord.ext import commands, tasks
-from main import poll_rss_feed
+from app.common import setup_logging
+from discord.ext import tasks
+from app.main import poll_rss_feed
 
 logger = setup_logging()
 

@@ -4,7 +4,6 @@ import logging
 import time
 import ssl
 import asyncio
-from common import decode_url
 
 RATE_LIMIT_STATUS = 429
 

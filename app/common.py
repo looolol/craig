@@ -2,7 +2,7 @@ import os
 import json
 import logging
 
-ID_FILE = 'processed_ids.json'
+ID_FILE = '../processed_ids.json'
 
 
 def setup_logging(name=None):
