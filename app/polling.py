@@ -26,6 +26,7 @@ def get_new_entries(feed, processed_ids):
 async def process_new_entries(entries, processed_ids, channel):
     logger.info(f'New entries found: {len(entries)}\n')
 
+    num_processed = 0
     async with aiohttp.ClientSession() as session:
         for entry in entries:
             entry_id = get_entry_id(entry)
@@ -36,8 +37,9 @@ async def process_new_entries(entries, processed_ids, channel):
 
             processed_ids.add(entry_id)
             save_processed_ids(processed_ids)
+            num_processed = num_processed + 1
 
-    logger.info(f'New Entries Processed: {len(processed_ids)}')
+    logger.info(f'New Entries Processed: {num_processed}')
 
 
 async def poll_rss_feed(channel):
