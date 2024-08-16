@@ -1,20 +1,31 @@
 import os
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 
-ID_FILE = '../processed_ids.json'
+ID_FILE = os.getenv('ID_FILE')
+LOG_FILE = os.getenv('LOG_FILE')
+
+RATE_LIMIT_STATUS = int(os.getenv('RATE_LIMIT_STATUS'))
 
 
-def setup_logging(name=None):
+def setup_logging(name=None, level=logging.INFO, filename=LOG_FILE, when='midnight', interval=1, backup_count=7):
     logger = logging.getLogger(name)
     if not logger.hasHandlers():
-        handler = logging.StreamHandler()  # Log to console
+        if filename:
+            handler = TimedRotatingFileHandler(
+                filename, when=when, interval=interval, backupCount=backup_count
+            )
+        else:
+            handler = logging.StreamHandler()
+
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-        logger.setLevel(logging.INFO)  # Set log level
+        logger.setLevel(level)
 
     return logger
+
 
 
 def decode_url(url):

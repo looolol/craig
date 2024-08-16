@@ -1,6 +1,8 @@
 .DS_Store
 .idea/*
 __pycache__/*
+app/__pycache__/*
 
 run_bot.sh
 processed_ids.json
+log.txt
