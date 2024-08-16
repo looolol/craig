@@ -5,7 +5,7 @@ export DISCORD_TOKEN=""
 export DISCORD_CHANNEL_ID=""
 
 export RSS_FEED=""
-export POLLING_INTERVAL="60"
+export POLLING_INTERVAL="900"
 
 export RATE_LIMIT_STATUS="429"
 
