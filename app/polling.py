@@ -32,11 +32,12 @@ async def process_new_entries(entries, processed_ids, channel):
             entry_id = get_entry_id(entry)
             logger.info(f'{entry_id} - Processing new entry: {entry.title} (ID: {entry_id})')
 
-            images = await parse_entry(entry, session)
-            await post_all_to_discord(channel, entry, images, session)
+            success, images = await parse_entry(entry, session)
+            if success:
+                await post_all_to_discord(channel, entry, images, session)
 
-            processed_ids.add(entry_id)
-            save_processed_ids(processed_ids)
+                processed_ids.add(entry_id)
+                save_processed_ids(processed_ids)
             num_processed = num_processed + 1
 
     logger.info(f'New Entries Processed: {num_processed}')
